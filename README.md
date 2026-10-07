@@ -58,6 +58,23 @@ python test_main1.py --max-irl-iterations 2 --max-oc-iterations 30 --subsamples 
 Use `python test_main1.py --help` to see all options. Add `--show` to open the
 result plot after training.
 
+## Four-pole MO-IRL example
+
+Run the PM2-style four-pole setup taken from
+`PointMass_IRL_AutoReg_6.ipynb` with:
+
+```bash
+python test_main2.py
+```
+
+Results are written to `outputs/mo_irl_four_poles.png` and
+`outputs/mo_irl_four_poles.npz`. To display the obstacle-cost activation
+regions in addition to the physical poles, run:
+
+```bash
+python test_main2.py --show-activation-margin
+```
+
 ## Notes
 
 - The notebooks are research prototypes rather than the final MO-IRL
