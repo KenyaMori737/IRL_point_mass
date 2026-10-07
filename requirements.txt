@@ -1,0 +1,7 @@
+setuptools>=70
+mim-solvers==0.3.0
+crocoddyl==3.2.1
+pin==4.1.0
+scipy>=1.15,<2
+matplotlib>=3.8,<4
+jupyterlab>=4,<5

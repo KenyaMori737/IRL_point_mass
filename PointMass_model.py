@@ -3,6 +3,18 @@ import numpy as np
 import mim_solvers
 from PointMass_utils import Costs, check_collision
 
+
+def set_solver_callbacks(solver, enabled):
+    """Configure verbose callbacks across mim-solvers API versions."""
+    callbacks = []
+    if enabled:
+        callback_type = getattr(
+            mim_solvers, "CallbackVerbose", crocoddyl.CallbackVerbose
+        )
+        callbacks.append(callback_type())
+    solver.setCallbacks(callbacks)
+
+
 class DifferentialActionModelPointMass(crocoddyl.DifferentialActionModelAbstract):
     def __init__(self, cost_model, w):
         crocoddyl.DifferentialActionModelAbstract.__init__(
@@ -44,8 +56,7 @@ def get_results_from_model(cost_set, xs_init, us_init, T, w, dt, max_iter, with_
     problem = crocoddyl.ShootingProblem(xs_init[0], [PM_IAM] * T, PM_IAM_T)
     # Creating the SQP solver
     sqp = mim_solvers.SolverSQP(problem)
-    sqp.setCallbacks([crocoddyl.CallbackVerbose()])
-    sqp.with_callbacks=with_callback
+    set_solver_callbacks(sqp, with_callback)
     sqp.termination_tolerance = 1e-5
     # xs_init = [x0 for i in range(T+1)]
     # us_init = [u0 for i in range(T)]
@@ -91,5 +102,5 @@ def reset_weights(solver, w_run, w_term):
     for i in range(T):
         solver.problem.runningModels[i].differential.model.costWeights = w_run
     solver.problem.terminalModel.differential.model.costWeights = w_term
-    solver.with_callbacks=False
+    set_solver_callbacks(solver, False)
     return solver
