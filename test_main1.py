@@ -37,9 +37,9 @@ class Trajectory:
 def build_problem() -> tuple[Costs, list[Obstacle], np.ndarray, np.ndarray, np.ndarray]:
     """Create the simplest diagonal reaching task with one central obstacle."""
     nx, nu = 4, 2
-    start = np.array([0.0, 0.0, 0.0, 0.0])
-    target = np.array([10.0, 10.0, 0.0, 0.0])
-    obstacle = Obstacle(5.0, 5.0, 1.0, 1.5, "Obs")
+    start = np.array([0.0, 5.0, 0.0, 0.0])
+    target = np.array([10.0, 5.0, 0.0, 0.0])
+    obstacle = Obstacle(5.0, 5.0, 2.0, 1.0, "Obs")
 
     costs = Costs()
     costs.add_cost(XReg(nx, target, "Goal"))
@@ -50,7 +50,7 @@ def build_problem() -> tuple[Costs, list[Obstacle], np.ndarray, np.ndarray, np.n
     # [Goal, XReg, UReg, Obs] for running and terminal costs.  The terminal
     # UReg weight is zero because there is no terminal control input.
     desired_weights = np.array(
-        [1.0, 1.0, 1.0, 2000.0, 2000.0, 1.0, 0.0, 10.0]
+        [10.0, 1.0, 1.0, 20000.0, 2000.0, 1.0, 0.0, 10.0]
     )
     desired_weights /= desired_weights.max()
     return costs, [obstacle], start, target, desired_weights
@@ -156,6 +156,68 @@ def merit_values(
     return m1, m2, gradient_m1
 
 
+def scale_weights(weights: np.ndarray) -> np.ndarray:
+    """Scale non-negative weights so their largest entry is one."""
+    maximum = float(np.max(weights))
+    if maximum <= 0.0:
+        return weights.copy()
+    return weights / maximum
+
+
+def print_cost_comparison(
+    costs: Costs,
+    expert: Trajectory,
+    learned: Trajectory,
+    desired_weights: np.ndarray,
+    learned_weights: np.ndarray,
+    dt: float,
+) -> None:
+    """Print weight-scaled trajectory costs and their feature contributions."""
+    learned_weights_scaled = scale_weights(learned_weights)
+    expert_features = suffix_features(costs, expert, dt, np.array([0]))[0]
+    learned_features = suffix_features(costs, learned, dt, np.array([0]))[0]
+
+    print("\nTrajectory cost comparison")
+    print("  (All learned costs below use learned weights scaled to max=1.)")
+    print(
+        f"  {'weights':18s} {'expert':>14s} {'MO-IRL':>14s}"
+        f" {'MO-IRL - expert':>18s}"
+    )
+    for label, weights in (
+        ("desired", desired_weights),
+        ("learned (scaled)", learned_weights_scaled),
+    ):
+        expert_cost = float(weights @ expert_features)
+        learned_cost = float(weights @ learned_features)
+        print(
+            f"  {label:18s} {expert_cost:14.6e} {learned_cost:14.6e}"
+            f" {learned_cost - expert_cost:18.6e}"
+        )
+
+    print("\nCost contributions under desired weights")
+    print(
+        f"  {'feature':18s} {'expert':>14s} {'MO-IRL':>14s}"
+        f" {'difference':>14s}"
+    )
+    expert_contributions = desired_weights * expert_features
+    learned_contributions = desired_weights * learned_features
+    feature_labels = [f"running {name}" for name in costs.names] + [
+        f"terminal {name}" for name in costs.names
+    ]
+    for label, expert_value, learned_value in zip(
+        feature_labels, expert_contributions, learned_contributions
+    ):
+        print(
+            f"  {label:18s} {expert_value:14.6e} {learned_value:14.6e}"
+            f" {learned_value - expert_value:14.6e}"
+        )
+    print(
+        f"  {'TOTAL':18s} {expert_contributions.sum():14.6e}"
+        f" {learned_contributions.sum():14.6e}"
+        f" {(learned_contributions - expert_contributions).sum():14.6e}"
+    )
+
+
 def learn_weights(
     costs: Costs,
     start: np.ndarray,
@@ -169,6 +231,7 @@ def learn_weights(
     l2_regularization: float,
     feature_tolerance: float,
     verbose_solver: bool,
+    obstacles: list[Obstacle] | None = None,
 ) -> tuple[np.ndarray, list[Trajectory], list[dict[str, float]]]:
     """Run MO-IRL with a moving window containing only the latest sample."""
     nr = costs.nr
@@ -200,6 +263,7 @@ def learn_weights(
     current_m1, current_m2, current_gradient = merit_values(
         weights, expert_features[0], initial_features[0]
     )
+    collision_obstacles = obstacles if obstacles is not None else costs.costs[-1:]
 
     print(
         "iter  alpha       m2_norm      weight_step  collision  optimizer",
@@ -207,7 +271,7 @@ def learn_weights(
     )
     print(
         f"{0:4d}  {'-':>5}  {current_m2 / normalization:12.6f}"
-        f"  {0.0:11.3e}  {str(check_collision(current.xs, costs.costs[-1:])):>9}"
+        f"  {0.0:11.3e}  {str(check_collision(current.xs, collision_obstacles)):>9}"
         "  initial",
         flush=True,
     )
@@ -276,7 +340,7 @@ def learn_weights(
         current_m2 = candidate_m2
         current_gradient = candidate_gradient
         normalized_m2 = current_m2 / normalization
-        collision = check_collision(current.xs, costs.costs[-1:])
+        collision = check_collision(current.xs, collision_obstacles)
         history.append(
             {
                 "iteration": float(iteration),
@@ -370,6 +434,7 @@ def save_results(
         learned_us=samples[-1].us,
         desired_weights=desired_weights,
         learned_weights=learned_weights,
+        learned_weights_scaled=scale_weights(learned_weights),
         history=history_array,
     )
     if show:
@@ -430,6 +495,7 @@ def main() -> int:
         args.l2,
         args.feature_tolerance,
         args.verbose_solver,
+        obstacles,
     )
     save_results(
         args.output,
@@ -446,16 +512,27 @@ def main() -> int:
     )
 
     nr = costs.nr
-    print("\nLearned weights (desired -> learned)")
+    learned_weights_scaled = scale_weights(learned_weights)
+    print("\nLearned weights (desired -> learned raw -> learned scaled)")
     for index, name in enumerate(costs.names):
         print(
             f"  running  {name:5s}: {desired_weights[index]:10.6f}"
             f" -> {learned_weights[index]:10.6f}"
+            f" -> {learned_weights_scaled[index]:10.6f}"
         )
         print(
             f"  terminal {name:5s}: {desired_weights[nr + index]:10.6f}"
             f" -> {learned_weights[nr + index]:10.6f}"
+            f" -> {learned_weights_scaled[nr + index]:10.6f}"
         )
+    print_cost_comparison(
+        costs,
+        expert,
+        samples[-1],
+        desired_weights,
+        learned_weights,
+        dt,
+    )
     print(f"\nResult plot: {args.output}")
     print(f"Result data: {args.data}")
     return 0
